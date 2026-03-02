@@ -12,7 +12,7 @@ from time import strftime, localtime
 import json
 
 from .imagenet_dataset import ImageNetDataset
-from .custom_vit import CustomViT
+from .TinyViT import TinyViT
 
 class Model():
     def __init__(self,
