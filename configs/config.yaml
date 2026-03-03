@@ -1,11 +1,11 @@
 data:
-  batch_size: 128
+  batch_size: 2048
   crop_scale:
   - 0.3
   - 1.0
   crop_size: 224
   dataset_folder_path: /mnt/raid1/lmk22/datasets/imagenet/
-  num_workers: 10
+  num_workers: 32
   pin_mem: true
 
 mask:
@@ -23,20 +23,21 @@ mask:
   - 0.2
 
 meta:
-  model_name: custom_vit
-  predictor_depth: 4
-  predictor_emb_dim: 128
+  model_name: tiny_vit
+  predictor_depth: 6
+  predictor_emb_dim: 384
+  predictor_num_heads: 3
 
 optimization:
   ema:
   - 0.996
   - 1.0
   lr:
-  - 0.0002
+  - 0.0001
   - 0.001
   - 0.000001
   start_wd:
   - 0.04
   - 0.4
   epochs: 300
-  warmup_epochs: 40
+  warmup_epochs: 15

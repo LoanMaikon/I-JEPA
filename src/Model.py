@@ -12,7 +12,7 @@ from time import strftime, localtime
 import json
 
 from .imagenet_dataset import ImageNetDataset
-from .TinyViT import TinyViT
+from .models import vit_predictor, vit_tiny, vit_small, vit_base, vit_large, vit_huge, vit_giant
 
 class Model():
     def __init__(self,
@@ -54,6 +54,7 @@ class Model():
         self.meta_model_name = str(self.config['meta']['model_name'])
         self.meta_predictor_depth = int(self.config['meta']['predictor_depth'])
         self.meta_predictor_emb_dim = int(self.config['meta']['predictor_emb_dim'])
+        self.meta_predictor_num_heads = int(self.config['meta']['predictor_num_heads'])
 
         self.optimization_ema = tuple(self.config['optimization']['ema'])
         self.optimization_lr = tuple(self.config['optimization']['lr'])

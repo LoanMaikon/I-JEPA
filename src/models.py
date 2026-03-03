@@ -89,9 +89,9 @@ class PatchEmbedding(nn.Module):
 
 """
 grid_size = grid height and width
-Return [grid_size * grid_size, embed_dim] or [1 + grid_size * grid_size, embed_dim] if cls_token is True
+Return [grid_size * grid_size, embed_dim]
 """
-def get_2d_sincos_pos_embed(embed_dim, grid_size, cls_token=False):
+def get_2d_sincos_pos_embed(embed_dim, grid_size):
     """
     Return the 2D sin-cos positional embedding.
 
@@ -138,9 +138,6 @@ def get_2d_sincos_pos_embed(embed_dim, grid_size, cls_token=False):
 
     grid = grid.reshape([2, 1, grid_size, grid_size])
     pos_embed = _get_2d_sincos_pos_embed_from_grid(embed_dim, grid)
-
-    if cls_token:
-        pos_embed = np.concatenate([np.zeros([1, embed_dim]), pos_embed], axis=0)
 
     return pos_embed # pos_embed.shape = (num_patches, embed_dim)
 
@@ -254,15 +251,15 @@ Encoder main class
 3. Pass the tokens through the transformer blocks
 ...
 """
-class TinyViT(nn.Module):
+class VisionTransformer(nn.Module):
     def __init__(self,
-                image_size=224,
+                embed_dim,
+                depth,
+                num_heads,
+                mlp_ratio,
                 patch_size=16,
                 in_channels=3,
-                embedding_dimesion=192,
-                depth=12,
-                num_heads=3,
-                mlp_ratio=4,
+                image_size=224,
                 qkv_bias=True,
                 qk_scale=None,
                 drop_rate=0.0,
@@ -271,25 +268,25 @@ class TinyViT(nn.Module):
                 norm_layer=partial(nn.LayerNorm, eps=1e-6),
                 init_std=0.02,
                 ):
-        super(TinyViT, self).__init__()
+        super(VisionTransformer, self).__init__()
 
         # Divide the image into patches and embed them
-        self.tokenizer = PatchEmbedding(image_size=image_size, patch_size=patch_size, in_channels=in_channels, embedding_dimension=embedding_dimesion)
+        self.tokenizer = PatchEmbedding(image_size=image_size, patch_size=patch_size, in_channels=in_channels, embedding_dimension=embed_dim)
 
         # Positional embedding (not learnable)
-        self.positional_embedding = nn.Parameter(torch.zeros(1, self.tokenizer.num_patches, embedding_dimesion), requires_grad=False)
-        values = get_2d_sincos_pos_embed(embedding_dimesion, int(self.tokenizer.num_patches**0.5), cls_token=False)
+        self.positional_embedding = nn.Parameter(torch.zeros(1, self.tokenizer.num_patches, embed_dim), requires_grad=False)
+        values = get_2d_sincos_pos_embed(embed_dim, int(self.tokenizer.num_patches**0.5))
         self.positional_embedding.data.copy_(torch.from_numpy(values).float().unsqueeze(0))
 
         # Create the transformer blocks
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]  # Stochastic depth decay - more drop for deeper blocks
         self.blocks = nn.ModuleList([
             Block(
-                dim=embedding_dimesion, num_heads=num_heads, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, qk_scale=qk_scale,
+                dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, qk_scale=qk_scale,
                 drop=drop_rate, attn_drop=attention_drop_rate, drop_path=dpr[i], norm_layer=norm_layer)
             for i in range(depth)
         ])
-        self.norm = norm_layer(embedding_dimesion)
+        self.norm = norm_layer(embed_dim)
 
         # Initialize weights
         self.init_std = init_std
@@ -375,10 +372,10 @@ class VisionTransformerPredictor(nn.Module):
     def __init__(
         self,
         num_patches,
-        embed_dim=192,
-        predictor_embed_dim=384,
-        depth=6,
-        num_heads=12,
+        embed_dim,
+        depth,
+        predictor_embed_dim,
+        num_heads,
         mlp_ratio=4.0,
         qkv_bias=True,
         qk_scale=None,
@@ -395,7 +392,7 @@ class VisionTransformerPredictor(nn.Module):
 
         # Create positional embedding for the predictor (not learnable)
         self.positional_embedding = nn.Parameter(torch.zeros(1, num_patches, predictor_embed_dim), requires_grad=False)
-        values = get_2d_sincos_pos_embed(predictor_embed_dim, int(num_patches ** 0.5), cls_token=False)
+        values = get_2d_sincos_pos_embed(predictor_embed_dim, int(num_patches ** 0.5))
         self.positional_embedding.data.copy_(torch.from_numpy(values).float().unsqueeze(0))
 
         # Create the transformer blocks for the predictor
@@ -481,3 +478,25 @@ class VisionTransformerPredictor(nn.Module):
         x = self.predictor_proj(x)
 
         return x
+
+def vit_predictor(num_patches, embed_dim, depth, predictor_embed_dim, num_heads):
+    return VisionTransformerPredictor(num_patches=num_patches, embed_dim=embed_dim, depth=depth, 
+                                      predictor_embed_dim=predictor_embed_dim, num_heads=num_heads)
+
+def vit_tiny():
+    return VisionTransformer(embed_dim=192, depth=12, num_heads=3, mlp_ratio=4)
+
+def vit_small():
+    return VisionTransformer(embed_dim=384, depth=12, num_heads=6, mlp_ratio=4)
+
+def vit_base():
+    return VisionTransformer(embed_dim=768, depth=12, num_heads=12, mlp_ratio=4)
+
+def vit_large():
+    return VisionTransformer(embed_dim=1024, depth=24, num_heads=16, mlp_ratio=4)
+
+def vit_huge():
+    return VisionTransformer(embed_dim=1280, depth=32, num_heads=16, mlp_ratio=4)
+
+def vit_giant():
+    return VisionTransformer(embed_dim=1408, depth=40, num_heads=16, mlp_ratio=48/11)
