@@ -257,7 +257,7 @@ class VisionTransformer(nn.Module):
                 depth,
                 num_heads,
                 mlp_ratio,
-                patch_size=16,
+                patch_size,
                 in_channels=3,
                 image_size=224,
                 qkv_bias=True,
@@ -324,27 +324,34 @@ class VisionTransformer(nn.Module):
     '''
     If the number of patches in the input x is different from the number of patches in the positional embedding, 
     we need to interpolate the positional embedding to match the number of patches in x.
-    1. get original positional embedding
-    2. Reshape it to (1, sqrt(N), sqrt(N), D) where N is the original number of patches and D is the embedding dimension
-    3. Interpolate it to (1, sqrt(npatch), sqrt(npatch), D) where npatch is the number of patches in x
-    4. Reshape it back to (1, npatch, D) and concatenate the class token embedding if it exists
     '''
     def _interpolate_pos_encoding(self, x, pos_embed):
-        npatch = x.shape[1] - 1
-        N = pos_embed.shape[1] - 1
+        npatch = x.shape[1]
+        N = pos_embed.shape[1]
+
         if npatch == N:
             return pos_embed
-        class_emb = pos_embed[:, 0]
-        pos_embed = pos_embed[:, 1:]
-        dim = x.shape[-1]
-        pos_embed = nn.functional.interpolate(
-            pos_embed.reshape(1, int(math.sqrt(N)), int(math.sqrt(N)), dim).permute(0, 3, 1, 2),
-            scale_factor=math.sqrt(npatch / N),
-            mode='bicubic',
-        )
-        pos_embed = pos_embed.permute(0, 2, 3, 1).view(1, -1, dim)
 
-        return torch.cat((class_emb.unsqueeze(0), pos_embed), dim=1)
+        dim = x.shape[-1]
+
+        h = w = int(math.sqrt(npatch))
+        h0 = w0 = int(math.sqrt(N))
+
+        if h * w != npatch or h0 * w0 != N:
+            raise ValueError(
+                f"Positional embedding requires square patch grids."
+                f"Got npatch={npatch} (h*w={h*w}) and N={N} (h0*w0={h0*w0})."
+            )
+
+        # [1, N, D] -> [1, D, h0, w0]
+        pos = pos_embed.reshape(1, h0, w0, dim).permute(0, 3, 1, 2)
+
+        pos = F.interpolate(pos, size=(h, w), mode='bicubic', align_corners=False)
+
+        # [1, D, h, w] -> [1, npatch, D]
+        pos = pos.permute(0, 2, 3, 1).reshape(1, npatch, dim)
+
+        return pos
 
     def forward(self, x, masks=None):
         if masks is not None:
@@ -491,20 +498,20 @@ def vit_predictor(num_patches, embed_dim, depth, predictor_embed_dim, num_heads)
     return VisionTransformerPredictor(num_patches=num_patches, embed_dim=embed_dim, depth=depth, 
                                       predictor_embed_dim=predictor_embed_dim, num_heads=num_heads)
 
-def vit_tiny():
-    return VisionTransformer(embed_dim=192, depth=12, num_heads=3, mlp_ratio=4)
+def vit_tiny(patch_size):
+    return VisionTransformer(embed_dim=192, depth=12, num_heads=3, mlp_ratio=4, patch_size=patch_size)
 
-def vit_small():
-    return VisionTransformer(embed_dim=384, depth=12, num_heads=6, mlp_ratio=4)
+def vit_small(patch_size):
+    return VisionTransformer(embed_dim=384, depth=12, num_heads=6, mlp_ratio=4, patch_size=patch_size)
 
-def vit_base():
-    return VisionTransformer(embed_dim=768, depth=12, num_heads=12, mlp_ratio=4)
+def vit_base(patch_size):
+    return VisionTransformer(embed_dim=768, depth=12, num_heads=12, mlp_ratio=4, patch_size=patch_size)
 
-def vit_large():
-    return VisionTransformer(embed_dim=1024, depth=24, num_heads=16, mlp_ratio=4)
+def vit_large(patch_size):
+    return VisionTransformer(embed_dim=1024, depth=24, num_heads=16, mlp_ratio=4, patch_size=patch_size)
 
-def vit_huge():
-    return VisionTransformer(embed_dim=1280, depth=32, num_heads=16, mlp_ratio=4)
+def vit_huge(patch_size):
+    return VisionTransformer(embed_dim=1280, depth=32, num_heads=16, mlp_ratio=4, patch_size=patch_size)
 
-def vit_giant():
-    return VisionTransformer(embed_dim=1408, depth=40, num_heads=16, mlp_ratio=48/11)
+def vit_giant(patch_size):
+    return VisionTransformer(embed_dim=1408, depth=40, num_heads=16, mlp_ratio=48/11, patch_size=patch_size)

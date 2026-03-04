@@ -20,7 +20,7 @@ from .schedulers import WarmupCosineSchedule, CosineWDSchedule
 
 class Model():
     def __init__(self,
-                 operation, # train or test
+                 operation,
                  config_path,
                  device,
                  output_path,
@@ -41,6 +41,25 @@ class Model():
         self._load_optimizer()
         self._load_schedulers()
         self._load_criterion()
+        self._load_momentum_schedule()
+
+    def get_optimizer(self):
+        return self.optimizer
+
+    def get_model(self):
+        return self.model
+    
+    def get_predictor(self):
+        return self.predictor
+
+    def get_target_model(self):
+        return self.target_model
+
+    def get_dataloader(self):
+        return self.dataloader
+
+    def get_num_epochs(self):
+        return self.optimization_epochs
 
     def _load_optimizer(self):
         # Biases and LayerNorm weights should not be decayed
@@ -69,33 +88,37 @@ class Model():
         
         self.optimizer = optim.AdamW(param_groups)
     
-    def _load_schedulers(self, ipe_scale=1.25):
+    def _load_schedulers(self):
         self.lr_scheduler = WarmupCosineSchedule(
             optimizer=self.optimizer,
             warmup_steps=self.optimization_warmup_epochs * len(self.dataloader),
             start_lr=self.optimization_lr[0],
             middle_lr=self.optimization_lr[1],
             final_lr=self.optimization_lr[2],
-            T_max=int(ipe_scale * self.optimization_epochs * len(self.dataloader))
+            T_max=int(self.optimization_ipe_scale * self.optimization_epochs * len(self.dataloader))
         )
 
         self.wd_scheduler = CosineWDSchedule(
             optimizer=self.optimizer,
             start_wd=self.optimization_start_wd[0],
             final_wd=self.optimization_start_wd[1],
-            T_max=int(ipe_scale * self.optimization_epochs * len(self.dataloader))
+            T_max=int(self.optimization_ipe_scale * self.optimization_epochs * len(self.dataloader))
         )
+    
+    def step_schedulers(self):
+        self.lr_scheduler.step()
+        self.wd_scheduler.step()
 
     def _load_criterion(self):
-        self.criterion = F.smooth_l1_loss
+        self.criterion = nn.MSELoss()
     
     def apply_criterion(self, pred, target):
         return self.criterion(pred, target)
 
     def _load_transform(self, mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)):
         self.transform = v2.Compose([
-            v2.Resize(self.data_crop_scale),
-            v2.ToTensor(),
+            v2.Resize((self.data_crop_size, self.data_crop_size)),
+            v2.Compose([v2.ToImage(), v2.ToDtype(torch.float32, scale=True)]),
             v2.Normalize(mean=mean, std=std)
         ])
 
@@ -108,33 +131,33 @@ class Model():
             context_mask_scale=self.mask_context_mask_scale,
             pred_aspect_ratio=self.mask_target_aspect_ratio,
             pred_mask_scale=self.mask_target_mask_scale
-        ) if self.operation == "train" else None
+        )
 
         dataset = ImageNetDataset(operation=self.operation, dataset_folder_path=self.data_dataset_folder_path, transform=self.transform)
         self.dataloader = torch.utils.data.DataLoader(
             dataset=dataset,
             batch_size=self.data_batch_size,
-            shuffle=True if self.operation == "train" else False,
+            shuffle=True,
             num_workers=self.data_num_workers,
             pin_memory=self.data_pin_mem,
             collate_fn=mask_collator,
-            drop_last=True if self.operation == "train" else False
+            drop_last=self.data_drop_last,
         )
     
     def _load_model(self):
         match self.meta_model_name:
             case "vit_tiny":
-                self.model = vit_tiny()
+                self.model = vit_tiny(patch_size=self.mask_patch_size)
             case "vit_small":
-                self.model = vit_small()
+                self.model = vit_small(patch_size=self.mask_patch_size)
             case "vit_base":
-                self.model = vit_base()
+                self.model = vit_base(patch_size=self.mask_patch_size)
             case "vit_large":
-                self.model = vit_large()
+                self.model = vit_large(patch_size=self.mask_patch_size)
             case "vit_huge":
-                self.model = vit_huge()
+                self.model = vit_huge(patch_size=self.mask_patch_size)
             case "vit_giant":
-                self.model = vit_giant()
+                self.model = vit_giant(patch_size=self.mask_patch_size)
 
 
         self.predictor = vit_predictor(num_patches=self.model.get_num_patches(),
@@ -153,6 +176,29 @@ class Model():
         self.model.to(self.device)
         self.predictor.to(self.device)
         self.target_model.to(self.device)
+
+        self.model.train()
+        self.predictor.train()
+        self.target_model.train()
+
+    def save_models(self):
+        os.makedirs(os.path.join(self.output_path, "models"), exist_ok=True)
+        torch.save(self.model.state_dict(), os.path.join(self.output_path, "models", "model.pth"))
+        torch.save(self.predictor.state_dict(), os.path.join(self.output_path, "models", "predictor.pth"))
+        torch.save(self.target_model.state_dict(), os.path.join(self.output_path, "models", "target_model.pth"))
+    
+    def _load_momentum_schedule(self):
+        self.momentum_scheduler = (self.optimization_ema[0] + i * (self.optimization_ema[1] - self.optimization_ema[0]) / (self.optimization_epochs * len(self.dataloader) * self.optimization_ipe_scale)
+                          for i in range(int(len(self.dataloader) * self.optimization_epochs * self.optimization_ipe_scale)))
+    
+    def step_momentum_schedule(self):
+        return next(self.momentum_scheduler)
+
+    def update_target_model(self):
+        momentum = self.step_momentum_schedule()
+
+        for param_q, param_k in zip(self.model.parameters(), self.target_model.parameters()):
+            param_k.data = momentum * param_k.data + (1 - momentum) * param_q.data
     
     def _unfreeze_model(self, model):
         for param in model.parameters():
@@ -178,6 +224,7 @@ class Model():
         self.data_dataset_folder_path = str(self.config['data']['dataset_folder_path'])
         self.data_num_workers = int(self.config['data']['num_workers'])
         self.data_pin_mem = bool(self.config['data']['pin_mem'])
+        self.data_drop_last = bool(self.config['data']['drop_last'])
 
         self.mask_target_aspect_ratio = tuple(self.config['mask']['target_aspect_ratio'])
         self.mask_context_mask_scale = tuple(self.config['mask']['context_mask_scale'])
@@ -191,6 +238,7 @@ class Model():
         self.meta_predictor_emb_dim = int(self.config['meta']['predictor_emb_dim'])
         self.meta_predictor_num_heads = int(self.config['meta']['predictor_num_heads'])
 
+        self.optimization_ipe_scale = float(self.config['optimization']['ipe_scale'])
         self.optimization_ema = tuple(self.config['optimization']['ema'])
         self.optimization_lr = tuple(self.config['optimization']['lr'])
         self.optimization_start_wd = tuple(self.config['optimization']['start_wd'])

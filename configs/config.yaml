@@ -4,9 +4,10 @@ data:
   - 0.3
   - 1.0
   crop_size: 224
-  dataset_folder_path: /mnt/raid1/lmk22/datasets/imagenet/
-  num_workers: 32
+  dataset_folder_path: /home/luan/Desktop/imagenet/
+  num_workers: 1 # Should be 32
   pin_mem: true
+  drop_last: true
 
 mask:
   target_aspect_ratio:
@@ -23,12 +24,13 @@ mask:
   - 0.2
 
 meta:
-  model_name: tiny_vit
+  model_name: vit_tiny
   predictor_depth: 6
   predictor_emb_dim: 384
   predictor_num_heads: 3
 
 optimization:
+  ipe_scale: 1.25
   ema:
   - 0.996
   - 1.0

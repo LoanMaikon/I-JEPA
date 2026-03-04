@@ -144,7 +144,7 @@ class MaskCollator(object):
         for _ in range(B):
 
             batch_masks_preds, batch_masks_preds_C = [], []
-            for _ in range(self.npred):
+            for _ in range(self.n_targets):
                 mask, mask_C = self._sample_block_mask(pred_size)
 
                 batch_masks_preds.append(mask)
