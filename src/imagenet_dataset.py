@@ -72,8 +72,4 @@ class ImageNetDataset(Dataset):
     def __getitem__(self, idx):
         image = read_image(self.images[idx], ImageReadMode.RGB)
 
-        match self.operation:
-            case "train":
-                return self.transform(image), self.transform(image)
-            case "test":
-                return self.transform(image), self.labels[idx]
+        return self.transform(image), self.labels[idx]

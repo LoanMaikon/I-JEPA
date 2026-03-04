@@ -270,6 +270,8 @@ class VisionTransformer(nn.Module):
                 ):
         super(VisionTransformer, self).__init__()
 
+        self.embed_dim = embed_dim
+
         # Divide the image into patches and embed them
         self.tokenizer = PatchEmbedding(image_size=image_size, patch_size=patch_size, in_channels=in_channels, embedding_dimension=embed_dim)
 
@@ -292,6 +294,12 @@ class VisionTransformer(nn.Module):
         self.init_std = init_std
         self.apply(self._init_weights)
         self._fix_init_weight()
+    
+    def get_embed_dim(self):
+        return self.embed_dim
+
+    def get_num_patches(self):
+        return self.tokenizer.num_patches
 
     def _fix_init_weight(self):
         def __rescale(param, layer_id):

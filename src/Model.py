@@ -10,9 +10,13 @@ import numpy as np
 import os
 from time import strftime, localtime
 import json
+import copy
+import torch.nn.functional as F
 
 from .imagenet_dataset import ImageNetDataset
 from .models import vit_predictor, vit_tiny, vit_small, vit_base, vit_large, vit_huge, vit_giant
+from .mask_collator import MaskCollator
+from .schedulers import WarmupCosineSchedule, CosineWDSchedule
 
 class Model():
     def __init__(self,
@@ -29,10 +33,141 @@ class Model():
 
         self._create_output_folder()
         self._load_config()
+        self._load_device()
 
+        self._load_transform()
+        self._load_dataloader()
+        self._load_model()
+        self._load_optimizer()
+        self._load_schedulers()
+        self._load_criterion()
+
+    def _load_optimizer(self):
+        # Biases and LayerNorm weights should not be decayed
+        param_groups = [
+            {
+                'params': (p for n, p in self.model.named_parameters()
+                        if ('bias' not in n) and (len(p.shape) != 1))
+            }, 
+            {
+                'params': (p for n, p in self.predictor.named_parameters()
+                        if ('bias' not in n) and (len(p.shape) != 1))
+            },
+            {
+                'params': (p for n, p in self.model.named_parameters()
+                        if ('bias' in n) or (len(p.shape) == 1)),
+                'WD_exclude': True,
+                'weight_decay': 0
+            },
+            {
+                'params': (p for n, p in self.predictor.named_parameters()
+                        if ('bias' in n) or (len(p.shape) == 1)),
+                'WD_exclude': True,
+                'weight_decay': 0
+            }
+        ]
+        
+        self.optimizer = optim.AdamW(param_groups)
+    
+    def _load_schedulers(self, ipe_scale=1.25):
+        self.lr_scheduler = WarmupCosineSchedule(
+            optimizer=self.optimizer,
+            warmup_steps=self.optimization_warmup_epochs * len(self.dataloader),
+            start_lr=self.optimization_lr[0],
+            middle_lr=self.optimization_lr[1],
+            final_lr=self.optimization_lr[2],
+            T_max=int(ipe_scale * self.optimization_epochs * len(self.dataloader))
+        )
+
+        self.wd_scheduler = CosineWDSchedule(
+            optimizer=self.optimizer,
+            start_wd=self.optimization_start_wd[0],
+            final_wd=self.optimization_start_wd[1],
+            T_max=int(ipe_scale * self.optimization_epochs * len(self.dataloader))
+        )
+
+    def _load_criterion(self):
+        self.criterion = F.smooth_l1_loss
+    
+    def apply_criterion(self, pred, target):
+        return self.criterion(pred, target)
+
+    def _load_transform(self, mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)):
+        self.transform = v2.Compose([
+            v2.Resize(self.data_crop_scale),
+            v2.ToTensor(),
+            v2.Normalize(mean=mean, std=std)
+        ])
+
+    def _load_dataloader(self):
+        mask_collator = MaskCollator(
+            crop_size=self.data_crop_size,
+            patch_size=self.mask_patch_size,
+            n_targets=self.mask_num_target_masks,
+            min_keep=self.mask_min_context_patches,
+            context_mask_scale=self.mask_context_mask_scale,
+            pred_aspect_ratio=self.mask_target_aspect_ratio,
+            pred_mask_scale=self.mask_target_mask_scale
+        ) if self.operation == "train" else None
+
+        dataset = ImageNetDataset(operation=self.operation, dataset_folder_path=self.data_dataset_folder_path, transform=self.transform)
+        self.dataloader = torch.utils.data.DataLoader(
+            dataset=dataset,
+            batch_size=self.data_batch_size,
+            shuffle=True if self.operation == "train" else False,
+            num_workers=self.data_num_workers,
+            pin_memory=self.data_pin_mem,
+            collate_fn=mask_collator,
+            drop_last=True if self.operation == "train" else False
+        )
+    
+    def _load_model(self):
+        match self.meta_model_name:
+            case "vit_tiny":
+                self.model = vit_tiny()
+            case "vit_small":
+                self.model = vit_small()
+            case "vit_base":
+                self.model = vit_base()
+            case "vit_large":
+                self.model = vit_large()
+            case "vit_huge":
+                self.model = vit_huge()
+            case "vit_giant":
+                self.model = vit_giant()
+
+
+        self.predictor = vit_predictor(num_patches=self.model.get_num_patches(),
+                                       embed_dim=self.model.get_embed_dim(),
+                                       depth=self.meta_predictor_depth,
+                                       predictor_embed_dim=self.meta_predictor_emb_dim,
+                                       num_heads=self.meta_predictor_num_heads,                     
+        )
+
+        self.target_model = copy.deepcopy(self.model)
+
+        self._unfreeze_model(self.model)
+        self._unfreeze_model(self.predictor)
+        self._freeze_model(self.target_model)
+
+        self.model.to(self.device)
+        self.predictor.to(self.device)
+        self.target_model.to(self.device)
+    
+    def _unfreeze_model(self, model):
+        for param in model.parameters():
+            param.requires_grad = True
+
+    def _freeze_model(self, model):
+        for param in model.parameters():
+            param.requires_grad = False
+        
     def _create_output_folder(self):
         os.makedirs(self.output_path)
         shutil.copy(self.config_path, os.path.join(self.output_path, "config.yaml"))
+    
+    def _load_device(self):
+        self.device = torch.device(f"cuda:{self.device}" if torch.cuda.is_available() else "cpu")
 
     def _load_config(self):
         self.config = yaml.safe_load(open(self.config_path, 'r'))
