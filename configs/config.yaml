@@ -1,5 +1,5 @@
 data:
-  batch_size: 16 # Should be 2048
+  batch_size: 64 # Should be 2048
   crop_scale:
   - 0.3
   - 1.0
@@ -30,7 +30,7 @@ meta:
   predictor_num_heads: 3
 
 optimization:
-  ipe_scale: 1.25
+  ipe_scale: 1.0
   ema:
   - 0.996
   - 1.0
@@ -38,7 +38,7 @@ optimization:
   - 0.0001
   - 0.001
   - 0.000001
-  start_wd:
+  wd:
   - 0.04
   - 0.4
   epochs: 2 # Should be 300

@@ -24,31 +24,40 @@ def train(model):
     for epoch in range(1, model.get_num_epochs() + 1):
         model.write_on_log(f"Epoch {epoch}/{model.get_num_epochs()}")
 
+        epoch_loss = 0.0
+        epoch_samples = 0
+
         for (images, labels), masks_context, masks_pred in model.get_dataloader():
             model.get_optimizer().zero_grad(set_to_none=True)
 
             imgs = images.to(model.device)
-            masks_context = masks_context.to(model.device)
-            masks_pred = masks_pred.to(model.device)
 
             with torch.amp.autocast('cuda', dtype=torch.float16):
                 z = model.get_model()(imgs, masks_context)
                 z_pred = model.get_predictor()(z, masks_context, masks_pred)
 
                 with torch.no_grad():
-                    z_target = model.get_target_model()(imgs, masks_pred)
-                    z_target = F.layer_norm(z_target, (z_target.size(-1),)) # Normalize target features
-                    z_target = apply_masks(z_target, masks_pred) # Apply masks to target features
-                    z_target = repeat_interleave_batch(z_target, imgs.size(0), repeat=len(masks_context))
+                    # z_target is obtained by forwarding the whole image
+                    z_target = model.get_target_model()(imgs)
+                    z_target = F.layer_norm(z_target, (z_target.size(-1),))
+                    B = len(z_target)
+                    z_target = apply_masks(z_target, masks_pred)
+                    z_target = repeat_interleave_batch(z_target, B, repeat=len(masks_context))
                 
                 loss = model.apply_criterion(z_pred, z_target)
                 scaler.scale(loss).backward()
                 scaler.step(model.get_optimizer())
                 scaler.update()
 
-            model.write_on_log(f"Loss: {loss.item():.4f}")
+            # model.print_schedulers()
             model.step_schedulers()
-            model.update_target_model()
+            model.update_target_model(print=False)
+
+            epoch_loss += loss.item() * images.size(0)
+            epoch_samples += images.size(0)
+
+        epoch_loss /= epoch_samples
+        model.write_on_log(f"Epoch {epoch} Loss: {epoch_loss:.4f}")
 
         model.save_models()
 

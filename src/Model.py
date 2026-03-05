@@ -66,27 +66,29 @@ class Model():
         param_groups = [
             {
                 'params': (p for n, p in self.model.named_parameters()
-                        if ('bias' not in n) and (len(p.shape) != 1))
+                        if ('bias' not in n) and (len(p.shape) != 1)),
+                'weight_decay': self.optimization_wd[0],
             }, 
             {
                 'params': (p for n, p in self.predictor.named_parameters()
-                        if ('bias' not in n) and (len(p.shape) != 1))
+                        if ('bias' not in n) and (len(p.shape) != 1)),
+                'weight_decay': self.optimization_wd[0],
             },
             {
                 'params': (p for n, p in self.model.named_parameters()
                         if ('bias' in n) or (len(p.shape) == 1)),
                 'WD_exclude': True,
-                'weight_decay': 0
+                'weight_decay': 0,
             },
             {
                 'params': (p for n, p in self.predictor.named_parameters()
                         if ('bias' in n) or (len(p.shape) == 1)),
                 'WD_exclude': True,
-                'weight_decay': 0
+                'weight_decay': 0,
             }
         ]
         
-        self.optimizer = optim.AdamW(param_groups)
+        self.optimizer = optim.AdamW(param_groups, lr=self.optimization_lr[0])
     
     def _load_schedulers(self):
         self.lr_scheduler = WarmupCosineSchedule(
@@ -100,14 +102,25 @@ class Model():
 
         self.wd_scheduler = CosineWDSchedule(
             optimizer=self.optimizer,
-            start_wd=self.optimization_start_wd[0],
-            final_wd=self.optimization_start_wd[1],
+            start_wd=self.optimization_wd[0],
+            final_wd=self.optimization_wd[1],
             T_max=int(self.optimization_ipe_scale * self.optimization_epochs * len(self.dataloader))
         )
     
     def step_schedulers(self):
         self.lr_scheduler.step()
         self.wd_scheduler.step()
+    
+    def print_schedulers(self):
+        lr = self.optimizer.param_groups[0].get('lr', 0.0)
+
+        wd = 0.0
+        for group in self.optimizer.param_groups:
+            if not group.get('WD_exclude', False):
+                wd = group.get('weight_decay', 0.0)
+                break
+
+        self.write_on_log(f"LR: {lr:.12f}, WD: {wd:.12f}")
 
     def _load_criterion(self):
         self.criterion = nn.MSELoss()
@@ -194,11 +207,13 @@ class Model():
     def step_momentum_schedule(self):
         return next(self.momentum_scheduler)
 
-    def update_target_model(self):
+    def update_target_model(self, print=False):
         momentum = self.step_momentum_schedule()
 
         for param_q, param_k in zip(self.model.parameters(), self.target_model.parameters()):
             param_k.data = momentum * param_k.data + (1 - momentum) * param_q.data
+
+        self.write_on_log(f"Updated target model with momentum: {momentum:.12f}") if print else None
     
     def _unfreeze_model(self, model):
         for param in model.parameters():
@@ -241,7 +256,7 @@ class Model():
         self.optimization_ipe_scale = float(self.config['optimization']['ipe_scale'])
         self.optimization_ema = tuple(self.config['optimization']['ema'])
         self.optimization_lr = tuple(self.config['optimization']['lr'])
-        self.optimization_start_wd = tuple(self.config['optimization']['start_wd'])
+        self.optimization_wd = tuple(self.config['optimization']['wd'])
         self.optimization_epochs = int(self.config['optimization']['epochs'])
         self.optimization_warmup_epochs = int(self.config['optimization']['warmup_epochs'])
 

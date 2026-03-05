@@ -18,11 +18,13 @@ class WarmupCosineSchedule(object):
         self.final_lr = final_lr
         self.warmup_steps = warmup_steps
         self.T_max = T_max - warmup_steps
+
         self._step = 0.
 
     def step(self):
         self._step += 1
-        if self._step < self.warmup_steps:
+
+        if self._step <= self.warmup_steps:
             progress = float(self._step) / float(max(1, self.warmup_steps))
             new_lr = self.start_lr + progress * (self.middle_lr - self.start_lr)
         else:
