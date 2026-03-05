@@ -4,14 +4,14 @@ import yaml
 import torch.nn as nn
 import torch.optim as optim
 import shutil
-import random
-import matplotlib.pyplot as plt
-import numpy as np
 import os
 from time import strftime, localtime
 import json
 import copy
 import torch.nn.functional as F
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data.distributed import DistributedSampler
+import torch.distributed as dist
 
 from .imagenet_dataset import ImageNetDataset
 from .models import vit_predictor, vit_tiny, vit_small, vit_base, vit_large, vit_huge, vit_giant
@@ -22,14 +22,20 @@ class Model():
     def __init__(self,
                  operation,
                  config_path,
-                 device,
+                 device_index,
                  output_path,
+                 distributed,
+                 world_size,
+                 rank,
                  ):
         
         self.operation = operation
         self.config_path = config_path
-        self.device = device
+        self.device_index = device_index
         self.output_path = output_path
+        self.distributed = distributed
+        self.world_size = world_size
+        self.rank = rank
 
         self._create_output_folder()
         self._load_config()
@@ -38,10 +44,22 @@ class Model():
         self._load_transform()
         self._load_dataloader()
         self._load_model()
-        self._load_optimizer()
-        self._load_schedulers()
         self._load_criterion()
         self._load_momentum_schedule()
+
+        if self.distributed:
+            self.model = DDP(self.model, device_ids=[self.device_index], find_unused_parameters=False)
+            self.predictor = DDP(self.predictor, device_ids=[self.device_index], find_unused_parameters=False)
+
+        self._load_optimizer()
+        self._load_schedulers()
+
+        if self.distributed:
+            for param in self.target_model.parameters():
+                dist.broadcast(param.data, src=0)
+
+    def is_main_process(self):
+        return self.rank == 0
 
     def get_optimizer(self):
         return self.optimizer
@@ -136,6 +154,9 @@ class Model():
         ])
 
     def _load_dataloader(self):
+        sampler = None
+        shuffle = True
+
         mask_collator = MaskCollator(
             crop_size=self.data_crop_size,
             patch_size=self.mask_patch_size,
@@ -147,14 +168,21 @@ class Model():
         )
 
         dataset = ImageNetDataset(operation=self.operation, dataset_folder_path=self.data_dataset_folder_path, transform=self.transform)
+
+        if self.distributed:
+            sampler = DistributedSampler(dataset, num_replicas=self.world_size, rank=self.rank, 
+                                         shuffle=True, drop_last=self.data_drop_last)
+            shuffle = False # Shuffle is handled by DistributedSampler
+
         self.dataloader = torch.utils.data.DataLoader(
             dataset=dataset,
             batch_size=self.data_batch_size,
-            shuffle=True,
+            shuffle=shuffle,
             num_workers=self.data_num_workers,
             pin_memory=self.data_pin_mem,
             collate_fn=mask_collator,
             drop_last=self.data_drop_last,
+            sampler=sampler,
         )
     
     def _load_model(self):
@@ -195,10 +223,16 @@ class Model():
         self.target_model.train()
 
     def save_models(self):
+        def _save_model_state_dict(model):
+            if isinstance(model, DDP):
+                return model.module.state_dict()
+            else:
+                return model.state_dict()
+
         os.makedirs(os.path.join(self.output_path, "models"), exist_ok=True)
-        torch.save(self.model.state_dict(), os.path.join(self.output_path, "models", "model.pth"))
-        torch.save(self.predictor.state_dict(), os.path.join(self.output_path, "models", "predictor.pth"))
-        torch.save(self.target_model.state_dict(), os.path.join(self.output_path, "models", "target_model.pth"))
+        torch.save(_save_model_state_dict(self.model), os.path.join(self.output_path, "models", "model.pth"))
+        torch.save(_save_model_state_dict(self.predictor), os.path.join(self.output_path, "models", "predictor.pth"))
+        torch.save(_save_model_state_dict(self.target_model), os.path.join(self.output_path, "models", "target_model.pth"))
     
     def _load_momentum_schedule(self):
         self.momentum_scheduler = (self.optimization_ema[0] + i * (self.optimization_ema[1] - self.optimization_ema[0]) / (self.optimization_epochs * len(self.dataloader) * self.optimization_ipe_scale)
@@ -210,7 +244,8 @@ class Model():
     def update_target_model(self, print=False):
         momentum = self.step_momentum_schedule()
 
-        for param_q, param_k in zip(self.model.parameters(), self.target_model.parameters()):
+        src_model = self.model.module if isinstance(self.model, DDP) else self.model
+        for param_q, param_k in zip(src_model.parameters(), self.target_model.parameters()):
             param_k.data = momentum * param_k.data + (1 - momentum) * param_q.data
 
         self.write_on_log(f"Updated target model with momentum: {momentum:.12f}") if print else None
@@ -222,16 +257,23 @@ class Model():
     def _freeze_model(self, model):
         for param in model.parameters():
             param.requires_grad = False
-        
+            
     def _create_output_folder(self):
-        os.makedirs(self.output_path)
-        shutil.copy(self.config_path, os.path.join(self.output_path, "config.yaml"))
+        if self.distributed:
+            if self.is_main_process():
+                os.makedirs(self.output_path)
+                shutil.copy(self.config_path, os.path.join(self.output_path, "config.yaml"))
+            dist.barrier()
+        else:
+            os.makedirs(self.output_path)
+            shutil.copy(self.config_path, os.path.join(self.output_path, "config.yaml"))
     
     def _load_device(self):
-        self.device = torch.device(f"cuda:{self.device}" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device(f"cuda:{self.device_index}" if torch.cuda.is_available() else "cpu")
 
     def _load_config(self):
-        self.config = yaml.safe_load(open(self.config_path, 'r'))
+        with open(self.config_path, 'r') as f:
+            self.config = yaml.safe_load(f)
 
         self.data_batch_size = int(self.config['data']['batch_size'])
         self.data_crop_scale = tuple(self.config['data']['crop_scale'])
@@ -263,6 +305,9 @@ class Model():
         self.data_dataset_folder_path += "/" if not self.data_dataset_folder_path.endswith("/") else ""
 
     def write_on_log(self, text):
+        if not self.is_main_process():
+            return
+    
         time = strftime("%Y-%m-%d %H:%M:%S - ", localtime())
         mode = "w" if not os.path.exists(os.path.join(self.output_path, "log.txt")) else "a"
         with open(os.path.join(self.output_path, "log.txt"), mode) as file:

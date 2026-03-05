@@ -1,11 +1,11 @@
 data:
-  batch_size: 64 # Should be 2048
+  batch_size: 32 # Batch size per GPU
   crop_scale:
   - 0.3
   - 1.0
   crop_size: 224
-  dataset_folder_path: /home/luan/Desktop/imagenet/
-  num_workers: 1 # Should be 32
+  dataset_folder_path: ../imagenet/
+  num_workers: 4
   pin_mem: true
   drop_last: true
 
@@ -41,5 +41,5 @@ optimization:
   wd:
   - 0.04
   - 0.4
-  epochs: 2 # Should be 300
-  warmup_epochs: 1 # Should be 15
+  epochs: 300
+  warmup_epochs: 15
