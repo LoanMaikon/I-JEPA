@@ -61,9 +61,9 @@ def train(model, distributed=False):
 
                 loss = model.apply_criterion(z_pred, z_target)
 
-            scaler.scale(loss).backward()
-            scaler.step(model.get_optimizer())
-            scaler.update()
+                scaler.scale(loss).backward()
+                scaler.step(model.get_optimizer())
+                scaler.update()
 
             model.step_schedulers()
             # model.print_schedulers()
