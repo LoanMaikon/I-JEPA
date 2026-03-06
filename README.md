@@ -64,3 +64,12 @@ optimization:
   - 0.4
   epochs: 300 # Number of epochs for training
   warmup_epochs: 15 # Number of warmup epochs
+</pre>
+
+The following command can be used to start the pretraining in two devices (0 and 1) and save the output in `../test_output`:
+
+```bash
+nohup torchrun --nproc_per_node=2 train.py --config configs/config.yaml --devices 0 1 --output_path ../test_output &
+```
+
+If you want to run on a single device, set --nproc_per_node=1 and --devices 0
