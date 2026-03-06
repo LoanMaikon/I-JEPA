@@ -28,6 +28,7 @@ meta:
   predictor_depth: 6
   predictor_emb_dim: 384
   predictor_num_heads: 3
+  checkpoint: false
 
 optimization:
   ipe_scale: 1.0

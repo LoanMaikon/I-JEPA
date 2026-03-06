@@ -258,6 +258,7 @@ class VisionTransformer(nn.Module):
                 num_heads,
                 mlp_ratio,
                 patch_size,
+                checkpoint,
                 in_channels=3,
                 image_size=224,
                 qkv_bias=True,
@@ -270,6 +271,7 @@ class VisionTransformer(nn.Module):
                 ):
         super(VisionTransformer, self).__init__()
 
+        self.checkpoint = checkpoint
         self.embed_dim = embed_dim
 
         # Divide the image into patches and embed them
@@ -371,8 +373,13 @@ class VisionTransformer(nn.Module):
             x = apply_masks(x, masks)
 
         # Forward propagation
-        for block in self.blocks:
-            x = block(x)
+        if not self.checkpoint:
+            for block in self.blocks:
+                x = block(x)
+        else:
+            for block in self.blocks:
+                x = torch.utils.checkpoint.checkpoint(block, x, use_reentrant=False)
+
         if self.norm is not None:
             x = self.norm(x)
 
@@ -391,6 +398,7 @@ class VisionTransformerPredictor(nn.Module):
         depth,
         predictor_embed_dim,
         num_heads,
+        checkpoint,
         mlp_ratio=4.0,
         qkv_bias=True,
         qk_scale=None,
@@ -401,6 +409,8 @@ class VisionTransformerPredictor(nn.Module):
         init_std=0.02,
     ):
         super().__init__()
+
+        self.checkpoint = checkpoint
 
         self.predictor_embed = nn.Linear(embed_dim, predictor_embed_dim, bias=True)
         self.mask_token = nn.Parameter(torch.zeros(1, 1, predictor_embed_dim))
@@ -484,8 +494,12 @@ class VisionTransformerPredictor(nn.Module):
         x = torch.cat([x, pred_tokens], dim=1)
 
         # Forward propagation
-        for blk in self.predictor_blocks:
-            x = blk(x)
+        if not self.checkpoint:
+            for blk in self.predictor_blocks:
+                x = blk(x)
+        else:
+            for blk in self.predictor_blocks:
+                x = torch.utils.checkpoint.checkpoint(blk, x, use_reentrant=False)
         x = self.predictor_norm(x)
 
         # Return preds for mask tokens
@@ -494,24 +508,25 @@ class VisionTransformerPredictor(nn.Module):
 
         return x
 
-def vit_predictor(num_patches, embed_dim, depth, predictor_embed_dim, num_heads):
+def vit_predictor(num_patches, embed_dim, depth, predictor_embed_dim, num_heads, checkpoint):
     return VisionTransformerPredictor(num_patches=num_patches, embed_dim=embed_dim, depth=depth, 
-                                      predictor_embed_dim=predictor_embed_dim, num_heads=num_heads)
+                                      predictor_embed_dim=predictor_embed_dim, num_heads=num_heads, 
+                                      checkpoint=checkpoint)
 
-def vit_tiny(patch_size):
-    return VisionTransformer(embed_dim=192, depth=12, num_heads=3, mlp_ratio=4, patch_size=patch_size)
+def vit_tiny(patch_size, checkpoint):
+    return VisionTransformer(embed_dim=192, depth=12, num_heads=3, mlp_ratio=4, patch_size=patch_size, checkpoint=checkpoint)
 
-def vit_small(patch_size):
-    return VisionTransformer(embed_dim=384, depth=12, num_heads=6, mlp_ratio=4, patch_size=patch_size)
+def vit_small(patch_size, checkpoint):
+    return VisionTransformer(embed_dim=384, depth=12, num_heads=6, mlp_ratio=4, patch_size=patch_size, checkpoint=checkpoint)
 
-def vit_base(patch_size):
-    return VisionTransformer(embed_dim=768, depth=12, num_heads=12, mlp_ratio=4, patch_size=patch_size)
+def vit_base(patch_size, checkpoint):
+    return VisionTransformer(embed_dim=768, depth=12, num_heads=12, mlp_ratio=4, patch_size=patch_size, checkpoint=checkpoint)
 
-def vit_large(patch_size):
-    return VisionTransformer(embed_dim=1024, depth=24, num_heads=16, mlp_ratio=4, patch_size=patch_size)
+def vit_large(patch_size, checkpoint):
+    return VisionTransformer(embed_dim=1024, depth=24, num_heads=16, mlp_ratio=4, patch_size=patch_size, checkpoint=checkpoint)
 
-def vit_huge(patch_size):
-    return VisionTransformer(embed_dim=1280, depth=32, num_heads=16, mlp_ratio=4, patch_size=patch_size)
+def vit_huge(patch_size, checkpoint):
+    return VisionTransformer(embed_dim=1280, depth=32, num_heads=16, mlp_ratio=4, patch_size=patch_size, checkpoint=checkpoint)
 
-def vit_giant(patch_size):
-    return VisionTransformer(embed_dim=1408, depth=40, num_heads=16, mlp_ratio=48/11, patch_size=patch_size)
+def vit_giant(patch_size, checkpoint):
+    return VisionTransformer(embed_dim=1408, depth=40, num_heads=16, mlp_ratio=48/11, patch_size=patch_size, checkpoint=checkpoint)

@@ -188,27 +188,29 @@ class Model():
     def _load_model(self):
         match self.meta_model_name:
             case "vit_tiny":
-                self.model = vit_tiny(patch_size=self.mask_patch_size)
+                self.model = vit_tiny(patch_size=self.mask_patch_size, checkpoint=self.meta_checkpoint)
             case "vit_small":
-                self.model = vit_small(patch_size=self.mask_patch_size)
+                self.model = vit_small(patch_size=self.mask_patch_size, checkpoint=self.meta_checkpoint)
             case "vit_base":
-                self.model = vit_base(patch_size=self.mask_patch_size)
+                self.model = vit_base(patch_size=self.mask_patch_size, checkpoint=self.meta_checkpoint)
             case "vit_large":
-                self.model = vit_large(patch_size=self.mask_patch_size)
+                self.model = vit_large(patch_size=self.mask_patch_size, checkpoint=self.meta_checkpoint)
             case "vit_huge":
-                self.model = vit_huge(patch_size=self.mask_patch_size)
+                self.model = vit_huge(patch_size=self.mask_patch_size, checkpoint=self.meta_checkpoint)
             case "vit_giant":
-                self.model = vit_giant(patch_size=self.mask_patch_size)
+                self.model = vit_giant(patch_size=self.mask_patch_size, checkpoint=self.meta_checkpoint)
 
 
         self.predictor = vit_predictor(num_patches=self.model.get_num_patches(),
                                        embed_dim=self.model.get_embed_dim(),
                                        depth=self.meta_predictor_depth,
                                        predictor_embed_dim=self.meta_predictor_emb_dim,
-                                       num_heads=self.meta_predictor_num_heads,                     
+                                       num_heads=self.meta_predictor_num_heads,    
+                                       checkpoint=self.meta_checkpoint,                 
         )
 
         self.target_model = copy.deepcopy(self.model)
+        self.target_model.checkpoint = False # Target model should not use checkpointing
 
         self._unfreeze_model(self.model)
         self._unfreeze_model(self.predictor)
@@ -294,6 +296,7 @@ class Model():
         self.meta_predictor_depth = int(self.config['meta']['predictor_depth'])
         self.meta_predictor_emb_dim = int(self.config['meta']['predictor_emb_dim'])
         self.meta_predictor_num_heads = int(self.config['meta']['predictor_num_heads'])
+        self.meta_checkpoint = bool(self.config['meta']['checkpoint'])
 
         self.optimization_ipe_scale = float(self.config['optimization']['ipe_scale'])
         self.optimization_ema = tuple(self.config['optimization']['ema'])
